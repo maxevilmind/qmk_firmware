@@ -16,6 +16,131 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #include QMK_KEYBOARD_H
 
+// Snap Tap Configuration
+#define SNAP_TAP_ENABLED 1  // Set to 0 to disable Snap Tap
+#define SNAP_TAP_PAIRS 4    // Maximum number of key pairs for Snap Tap
+
+// Snap Tap key pairs - define opposing keys that should use Snap Tap
+// Format: {key1, key2, 0} - the 0 is a terminator
+static const uint16_t snap_tap_pairs[][3] = {
+    {KC_A, KC_D, 0},        // Left/Right movement
+    {KC_W, KC_S, 0},        // Forward/Backward movement  
+    {KC_LEFT, KC_RIGHT, 0}, // Arrow keys
+    {KC_UP, KC_DOWN, 0},    // Arrow keys
+    {0, 0, 0}               // Terminator
+};
+
+// Snap Tap state tracking
+typedef struct {
+    uint16_t key1;
+    uint16_t key2;
+    bool key1_held;      // Is key1 physically held down?
+    bool key2_held;      // Is key2 physically held down?
+    uint16_t active_key; // Which key is currently sending input (0 = none)
+} snap_tap_pair_state_t;
+
+static snap_tap_pair_state_t snap_tap_states[SNAP_TAP_PAIRS];
+
+// Initialize Snap Tap states
+void snap_tap_init(void) {
+    for (int i = 0; i < SNAP_TAP_PAIRS; i++) {
+        snap_tap_states[i].key1 = snap_tap_pairs[i][0];
+        snap_tap_states[i].key2 = snap_tap_pairs[i][1];
+        snap_tap_states[i].key1_held = false;
+        snap_tap_states[i].key2_held = false;
+        snap_tap_states[i].active_key = 0;
+    }
+}
+
+// Find Snap Tap pair for a given keycode
+int find_snap_tap_pair(uint16_t keycode) {
+    for (int i = 0; i < SNAP_TAP_PAIRS; i++) {
+        if (snap_tap_states[i].key1 == keycode || snap_tap_states[i].key2 == keycode) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// Handle Snap Tap logic
+bool snap_tap_process(uint16_t keycode, keyrecord_t *record) {
+    if (!SNAP_TAP_ENABLED) return true;
+    
+    int pair_index = find_snap_tap_pair(keycode);
+    if (pair_index == -1) return true;
+    
+    snap_tap_pair_state_t *state = &snap_tap_states[pair_index];
+    bool is_key1 = (keycode == state->key1);
+    bool is_key2 = (keycode == state->key2);
+    
+    if (!is_key1 && !is_key2) return true;
+    
+    if (record->event.pressed) {
+        // Key press
+        if (is_key1) {
+            state->key1_held = true;
+            
+            // If the other key is currently active, release it
+            if (state->active_key == state->key2) {
+                unregister_code(state->key2);
+            }
+            
+            // Make this key active
+            state->active_key = state->key1;
+            register_code(state->key1);
+            
+        } else if (is_key2) {
+            state->key2_held = true;
+            
+            // If the other key is currently active, release it
+            if (state->active_key == state->key1) {
+                unregister_code(state->key1);
+            }
+            
+            // Make this key active
+            state->active_key = state->key2;
+            register_code(state->key2);
+        }
+        
+        return false; // Don't process normally, we handled it
+        
+    } else {
+        // Key release
+        if (is_key1) {
+            state->key1_held = false;
+            
+            // If this was the active key, release it
+            if (state->active_key == state->key1) {
+                unregister_code(state->key1);
+                state->active_key = 0;
+                
+                // If the other key is still held, activate it
+                if (state->key2_held) {
+                    state->active_key = state->key2;
+                    register_code(state->key2);
+                }
+            }
+            
+        } else if (is_key2) {
+            state->key2_held = false;
+            
+            // If this was the active key, release it
+            if (state->active_key == state->key2) {
+                unregister_code(state->key2);
+                state->active_key = 0;
+                
+                // If the other key is still held, activate it
+                if (state->key1_held) {
+                    state->active_key = state->key1;
+                    register_code(state->key1);
+                }
+            }
+        }
+        
+        return false; // Don't process normally, we handled it
+    }
+}
+
 // clang-format off
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 
@@ -66,3 +191,19 @@ const uint16_t PROGMEM encoder_map[][NUM_ENCODERS][NUM_DIRECTIONS] = {
     [1] = { ENCODER_CCW_CW(KC_TRNS, KC_TRNS) }
 };
 #endif
+
+// Initialize Snap Tap on keyboard startup
+void keyboard_post_init_user(void) {
+    snap_tap_init();
+}
+
+// Process Snap Tap for all key events
+bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+    // Handle Snap Tap logic first
+    if (!snap_tap_process(keycode, record)) {
+        return false; // Snap Tap handled this key
+    }
+    
+    // Continue with normal key processing
+    return true;
+}
